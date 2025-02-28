@@ -1,25 +1,25 @@
 import os
 import time
 import psutil
-from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+from cryptography.hazmat.primitives.ciphers.aead import ChaCha20Poly1305
 from cryptography.hazmat.backends import default_backend
 
-# Pin process to multiple CPU cores to reduce interruptions
+# Pin process to CPU core 0 for better consistency
 p = psutil.Process(os.getpid())
-p.cpu_affinity([0, 1])  # Use cores 0 and 1 for better consistency
+p.cpu_affinity([0])  # Set CPU affinity to core 0
 
-# Set process to high priority
+# Set process to high priority to minimize interruptions
 p.nice(psutil.HIGH_PRIORITY_CLASS)
 
 def get_cpu_frequency():
-    """Returns the average CPU frequency in Hz."""
-    freqs = psutil.cpu_freq()
-    return freqs.current * 1e6  # Convert MHz to Hz
+    """Returns the current CPU frequency in Hz."""
+    freq = psutil.cpu_freq().current  # CPU frequency in MHz
+    return freq * 1e6  # Convert MHz to Hz
 
 def get_cpu_cycles(start_time_ns, end_time_ns):
-    """Estimates CPU cycles based on elapsed time."""
-    cpu_freq = get_cpu_frequency()
-    elapsed_time_sec = (end_time_ns - start_time_ns) / 1e9
+    """Estimates CPU cycles from elapsed time in nanoseconds."""
+    cpu_freq = get_cpu_frequency()  # Get CPU frequency in Hz
+    elapsed_time_sec = (end_time_ns - start_time_ns) / 1e9  # Convert ns to sec
     return int(elapsed_time_sec * cpu_freq)  # CPU cycles = time * frequency
 
 def read_file(file_path):
@@ -34,38 +34,36 @@ def read_file(file_path):
         print(f"Error: {e}")
         return None
 
-def aes_encrypt_gcm(file_data, key):
-    """Performs AES-GCM encryption and measures CPU cycles."""
-    nonce = os.urandom(12)  # 12-byte IV (GCM standard)
-    cipher = Cipher(algorithms.AES(key), modes.GCM(nonce), backend=default_backend())
-    encryptor = cipher.encryptor()
+def chacha20_poly1305_encrypt(file_data, key, nonce):
+    """Performs ChaCha20-Poly1305 encryption and measures CPU cycles."""
+    chacha = ChaCha20Poly1305(key)
 
-    start_time = time.perf_counter_ns()
-    cipher_text = encryptor.update(file_data) + encryptor.finalize()
-    end_time = time.perf_counter_ns()
+    start_time = time.perf_counter_ns()  # Start timing
+    cipher_text = chacha.encrypt(nonce, file_data, None)  # Encrypt data with None as associated data
+    end_time = time.perf_counter_ns()  # End timing
 
     cpu_cycles_used = get_cpu_cycles(start_time, end_time)
-    return nonce, cipher_text, encryptor.tag, cpu_cycles_used  # Return tag as well
+    return cipher_text, cpu_cycles_used
 
 if __name__ == "__main__":
-    key = os.urandom(32)  # AES-256 key
+    key = os.urandom(32)  # Generate a 256-bit ChaCha20Poly1305 key (32 bytes)
+    nonce = os.urandom(12)  # Generate a 12-byte nonce for ChaCha20Poly1305
     file_path = input("Enter the full path to the file: ").strip()
     file_data = read_file(file_path)
 
     if file_data:
         file_size = len(file_data)
-        print(f"\nEncrypting file of size {file_size / (1024 * 1024):.2f} MB...\n")
+        print(f"\nEncrypting file of size {file_size / (1024 * 1024):.2f} MB using ChaCha20-Poly1305...\n")
 
-        num_runs = 10  # More runs for better averaging
+        num_runs = 5  # Number of iterations for averaging
         total_cycles = 0
+        cycle_results = []
 
         for i in range(num_runs):
-            nonce, cipher_text, tag, cpu_cycles = aes_encrypt_gcm(file_data, key)
-            
-            if i > 0:  # Skip first run for better accuracy
-                total_cycles += cpu_cycles
+            cipher_text, cpu_cycles = chacha20_poly1305_encrypt(file_data, key, nonce)
+            cycle_results.append(cpu_cycles)
+            total_cycles += cpu_cycles
+            #print(f"Run {i + 1}: CPU Cycles used = {cpu_cycles / 1e6:.2f} million")
 
-            #print(f"Run {i + 1}: CPU Cycles = {cpu_cycles / 1e6:.2f} million")
-
-        avg_cycles = total_cycles / (num_runs - 1)  # Exclude first run
-        print(f"\nFinal Average CPU Cycles: {avg_cycles / 1e6:.2f} million cycles")
+        avg_cycles = total_cycles / num_runs  # Compute average cycles
+        print(f"\n Average CPU Cycles for ChaCha20-Poly1305 encryption: {avg_cycles / 1e6:.2f} million cycles")
