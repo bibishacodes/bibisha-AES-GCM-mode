@@ -1,95 +1,73 @@
+from cryptography.hazmat.primitives.ciphers.aead import ChaCha20Poly1305
 import os
 import base64
 import time
-from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
-from cryptography.hazmat.backends import default_backend
 
-def read_file(file_path):
+def encrypt_file_chacha20_poly1305(file_path):
     try:
-        with open(file_path, "rb") as f:
-            return f.read()
-    except FileNotFoundError:
-        print("Error: File not found!")
-        return None
-    except OSError as e:
-        print(f"Error: {e}")
-        return None
+        with open(file_path, 'rb') as file:
+            file_data = file.read()
 
-def encrypt_file_aes_gcm(file_data):
-    try:
-        key = os.urandom(32)  # AES-256 key (32 bytes)
-        nonce = os.urandom(12)  # 96-bit nonce for GCM
-        cipher = Cipher(algorithms.AES(key), modes.GCM(nonce), backend=default_backend())
-        encryptor = cipher.encryptor()
+        key = os.urandom(32)  # 256-bit key for ChaCha20-Poly1305
+        nonce = os.urandom(12)  # 12-byte nonce
+        chacha = ChaCha20Poly1305(key)
 
         start_time = time.perf_counter()
-        encrypted_data = encryptor.update(file_data) + encryptor.finalize()
+        encrypted_data = chacha.encrypt(nonce, file_data, None)
         encryption_time = time.perf_counter() - start_time
-        execution_time_enc = time.perf_counter() - start_time
-        throughput = (len(file_data) / encryption_time) / (1024 * 1024) if encryption_time > 0 else 0
+
+        throughput = len(file_data) / encryption_time / (1024 * 1024) if encryption_time > 0 else 0  # MB per second
 
         return {
-            "encrypted_data": encrypted_data,
-            "key": key,
-            "nonce": nonce,
-            "tag": encryptor.tag,
+            "encrypted_data": base64.b64encode(encrypted_data).decode(),
+            "key": base64.b64encode(key).decode(),
+            "nonce": base64.b64encode(nonce).decode(),
             "encryption_time": encryption_time,
-            "throughput": throughput,
-            "execution_time_enc": execution_time_enc
+            "throughput": throughput  
         }
     except Exception as e:
         return {"error": f"Encryption failed: {str(e)}"}
 
-def decrypt_file_aes_gcm(encrypted_data, key, nonce, tag, execution_time_enc):
+def decrypt_file_chacha20_poly1305(encrypted_data_b64, key_b64, nonce_b64):
     try:
-        cipher = Cipher(algorithms.AES(key), modes.GCM(nonce, tag), backend=default_backend())
-        decryptor = cipher.decryptor()
-        
+        encrypted_data = base64.b64decode(encrypted_data_b64)
+        key = base64.b64decode(key_b64)
+        nonce = base64.b64decode(nonce_b64)
+        chacha = ChaCha20Poly1305(key)
+
         start_time = time.perf_counter()
-        decrypted_data = decryptor.update(encrypted_data) + decryptor.finalize()
+        decrypted_data = chacha.decrypt(nonce, encrypted_data, None)
         decryption_time = time.perf_counter() - start_time
-        execution_time_dec = time.perf_counter() - start_time
-        execution_time_aes_gcm = execution_time_enc + execution_time_dec
-        
+
         return {
-            "decryption_time": decryption_time,
-            "execution_time_aes_gcm": execution_time_aes_gcm,
-            "decrypted_data": decrypted_data
+            "decrypted_data": decrypted_data,
+            "decryption_time": decryption_time
         }
     except Exception as e:
         return {"error": f"Decryption failed: {str(e)}"}
 
-if __name__ == "__main__":
-    file_path = input("Enter the full path to the file: ").strip()
-    file_data = read_file(file_path)
-    
-    if file_data:
-        print(f"\nEncrypting file of size {len(file_data) / 1024:.2f} KB...")
-        encryption_result = encrypt_file_aes_gcm(file_data)
-        
-        if "error" in encryption_result:
-            print(encryption_result["error"])
-        else:
-            print(f"\nEncryption Successful!")
-            print(f"Encryption Time: {encryption_result['encryption_time']:.6f} sec")
-            print(f"Execution Time (Encryption): {encryption_result['execution_time_enc']:.6f} sec")
-            print(f"Throughput: {encryption_result['throughput']:.2f} MB/sec")
-            print(f"Key (Base64): {base64.b64encode(encryption_result['key']).decode()}")
-            print(f"Nonce (Base64): {base64.b64encode(encryption_result['nonce']).decode()}")
-            print(f"Tag (Base64): {base64.b64encode(encryption_result['tag']).decode()}")
+file_path = input("Enter the path to the file: ").strip()
 
-            
-            decryption_result = decrypt_file_aes_gcm(
-                encryption_result['encrypted_data'],
-                encryption_result['key'],
-                encryption_result['nonce'],
-                encryption_result['tag'],
-                encryption_result['execution_time_enc']
-            )
-            
-            if "error" in decryption_result:
-                print(decryption_result["error"])
-            else:
-               
-                print(f"Decryption Time: {decryption_result['decryption_time']:.6f} sec")
-                print(f"Total Execution Time: {decryption_result['execution_time_aes_gcm']:.6f} sec")
+start_execution = time.perf_counter()
+result = encrypt_file_chacha20_poly1305(file_path)
+
+if "error" in result:
+    print(result["error"])
+else:
+    print(f"\nEncryption Successful!")
+    print(f"Encryption Time: {result['encryption_time']:.6f} seconds")
+    print(f"Throughput: {result['throughput']:.2f} MB per second")
+    print(f"Key (Base64): {result['key']}")
+    print(f"Nonce (Base64): {result['nonce']}")
+
+    print("\nDecrypting file...")
+    decryption_result = decrypt_file_chacha20_poly1305(result["encrypted_data"], result["key"], result["nonce"])
+
+    if "error" in decryption_result:
+        print(decryption_result["error"])
+    else:
+        
+        print(f"Decryption Time: {decryption_result['decryption_time']:.6f} seconds")
+
+execution_time = time.perf_counter() - start_execution
+print(f"\nTotal Execution Time (Encryption + Decryption): {execution_time:.6f} seconds")
